@@ -1,2 +1,2 @@
 # etcd-scope
-An etcd client for inspecting and probing.
+An etcd client for inspecting and probing etcd.
