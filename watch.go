@@ -36,12 +36,7 @@ func doWatch(cmd *cobra.Command, args []string) (err error) {
 		log.Debug().Str("key", watchKey).Msg("watching single key")
 	}
 
-	opts := []etcd.OpOption{}
-	opts = append(opts, etcd.WithPrevKV())
-	if prefixFlag {
-		opts = append(opts, etcd.WithPrefix())
-	}
-
+	// mimic the caller of this func's context
 	ctx, cancel := context.WithCancel(context.TODO())
 	defer cancel()
 
@@ -51,7 +46,35 @@ func doWatch(cmd *cobra.Command, args []string) (err error) {
 		return err
 	}
 
-	watchCh := etcdClient.Watch(ctx, watchKey, opts...)
+	opts := []etcd.OpOption{}
+	opts = append(opts, etcd.WithPrevKV())
+	if prefixFlag {
+		opts = append(opts, etcd.WithPrefix())
+	}
+
+	//watchCh := etcdClient.Watch(ctx, watchKey, opts...)
+
+	var lastRev int64 = 0
+	for ctx.Err() == nil { // ever (until context canceled)
+		lastRev, err = watchUntilDisconnect(ctx, etcdClient, lastRev, watchKey, opts)
+		log.Info().Int64("last-rev", lastRev).Msg("broke out of watchUntilDisconnect()")
+	}
+
+	return ctx.Err()
+}
+
+func watchUntilDisconnect(ctx context.Context, etcdClient *etcd.Client, rev int64, key string, opts []etcd.OpOption) (lastRev int64, err error) {
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	lastRev = rev
+	if lastRev > 0 { // pick up where we left off
+		log.Info().Int64("last-rev", lastRev+1).Msg("setting OpOption.WithRev()")
+		opts = append(opts, etcd.WithRev(lastRev+1))
+	}
+
+	watchCh := etcdClient.Watch(ctx, key, opts...)
 
 	for ctx.Err() == nil { // ever (until context canceled)
 		var wr etcd.WatchResponse
@@ -60,7 +83,17 @@ func doWatch(cmd *cobra.Command, args []string) (err error) {
 		select {
 		case wr = <-watchCh:
 		case <-ctx.Done():
-			return ctx.Err()
+			return lastRev, ctx.Err()
+		}
+
+		if wr.Created {
+			log.Info().Msg("WatchResponse.Created = TRUE")
+		}
+
+		if wr.Canceled {
+			log.Warn().Int64("rev", wr.Header.GetRevision()).Msg("received WatchResponse.Canceled = TRUE")
+			return lastRev, nil
+
 		}
 
 		if len(wr.Events) <= 0 {
@@ -69,18 +102,17 @@ func doWatch(cmd *cobra.Command, args []string) (err error) {
 		}
 
 		for ii, ev := range wr.Events {
-			key := string(ev.Kv.Key)
-			val := string(ev.Kv.Value)
 			if ev.Type == etcd.EventTypePut {
-				fmt.Printf("watch[%d]: PUT{k: %s, v: %s}\n", ii, key, val)
+				fmt.Printf("watch[%d](rev: %d): PUT: %s <-- %s\n",
+					ii, wr.Header.Revision, FmtKv(ev.Kv), FmtKv(ev.PrevKv))
 			} else if ev.Type == etcd.EventTypeDelete {
-				fmt.Printf("watch[%d]: DEL{k: %s}\n", ii, key)
+				fmt.Printf("watch[%d](rev: %d): DEL <-- %s\n",
+					ii, wr.Header.Revision, FmtKv(ev.PrevKv))
 			} else {
 				log.Warn().Msgf("UNKNOWN Event Type: %v", ev)
 			}
 		}
+		lastRev = wr.Header.Revision
 	}
-
-	fmt.Println("watch stub...")
-	return nil
+	return lastRev, ctx.Err()
 }

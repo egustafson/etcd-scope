@@ -15,6 +15,7 @@ func newEtcd3Client() (c *etcd.Client, err error) {
 	return etcd.New(etcd.Config{
 		Endpoints:        []string{Config.Endpoint},
 		AutoSyncInterval: 0, // <-- disables auto-sync
-		DialTimeout:      1 * time.Second,
+		//AutoSyncInterval: 2 * time.Second,
+		DialTimeout: 1 * time.Second,
 	})
 }

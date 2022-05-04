@@ -1,4 +1,5 @@
-etcd-scope
+/etcd-scope
+/.vscode
 
 # Binaries for programs and plugins
 *.exe
